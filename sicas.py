@@ -4,7 +4,6 @@ import argparse
 import os
 from sicxe import *
 
-
 class AssembleError(BaseException):
     pass
 
@@ -200,7 +199,7 @@ if __name__ == "__main__":
     for file_name in input_files:
         program = Program(file_name)
         try:
-            print("\nStart assembly %s ..." % program.source)
+            print("\nStarting assemble %s ..." % program.source)
             program.assemble()
             print("Done.")
             print(program.symtab)
