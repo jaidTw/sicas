@@ -13,12 +13,19 @@ class Line:
         self.code = ""
         self.lineno = lineno
         self.fmt = 0
+        self.loc = 0
     
     def __str__(self):
         return self.assembly
 
     def tokenize(self):
         return self.assembly.split()
+
+    def listing_tuple(self):
+        if self.loc != None:
+            return (self.lineno, "%04X" % self.loc, self.assembly, self.code)
+        else:
+            return (self.lineno, "", self.assembly, self.code)
 
 class Program:
     def __init__(self, source):
@@ -38,9 +45,12 @@ class Program:
 
     def assemble(self):
         for line in self.content:
+            program.lineno += 1
+            line.loc = self.LOCCTR
             if line.assembly[0] == '.':
+                line.loc = None
                 continue
-            #print("%04X\t %s" % (self.LOCCTR, line))
+
             tokens = line.tokenize()
 
             self.lineno = line.lineno
@@ -50,6 +60,14 @@ class Program:
                 continue
             else:
                 program.error("Except a directive, opcde or label.")
+
+    def listing(self):
+        print("Lineno\tLOCCTR\tSource Statement\t\t\tObject Code")
+        for line in self.content:
+            print("%d\t%s\t%s\t\t\t%s" % line.listing_tuple())
+
+    def current_line(self):
+        return self.content[self.lineno - 1]
 
 def handler_START(program, tokens):
     if "START" in tokens:
@@ -69,8 +87,10 @@ def handler_START(program, tokens):
         except ValueError:
            program.error("%s is an invalid value for starting address (hexadecimal is required)." % tokens[2])
         program.started = True
+        program.current_line().loc = None
 
 def handler_END(program_inf, tokens):
+    program.current_line().loc = None
     pass
 
 def handler_BYTE(program_inf, tokens):
@@ -125,6 +145,7 @@ def handler_RESB(program_inf, tokens):
     program.LOCCTR += int(tokens[2])
 
 def handler_BASE(program_inf, tokens):
+    program.current_line().loc = None
     pass
 
 DIRTAB = {
@@ -187,11 +208,12 @@ def has_labels(program_inf, tokens):
 if __name__ == "__main__":
     # Parse the arguments
     parser = argparse.ArgumentParser(description="A Python SIC/XE Assembler")
-    parser.add_argument('-o', help='the output file.', default='a.out')
-    parser.add_argument('--listing', help='generate assembly listing.')
+    parser.add_argument('-o', '--output', help='the output file.', default='a.out')
+    parser.add_argument('-L', '--listing', help='generate assembly listing.', action='store_true')
     parser.add_argument('input', nargs='+', help='the source assembly file(s).')
     args = parser.parse_args()
     input_files = args.input
+    listing = args.listing
 
     print("SIC/XE Assembler")
 
@@ -202,10 +224,12 @@ if __name__ == "__main__":
             print("\nStarting assemble %s ..." % program.source)
             program.assemble()
             print("Done.")
+            if listing:
+                program.listing()
             symlist = list(program.symtab.items())
             symlist.sort(key=lambda x : x[1])
             for x in symlist:
-                print("%s\t\t: 0x%4X" %(x[0], x[1]))
+                print("%s\t\t: 0x%04X" %(x[0], x[1]))
         except AssembleError:
             print("Assemble failed.")
             continue
