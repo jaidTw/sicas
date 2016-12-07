@@ -40,7 +40,7 @@ class Program:
         for line in self.content:
             if line.assembly[0] == '.':
                 continue
-            print("%04X\t %s" % (self.LOCCTR, line))
+            #print("%04X\t %s" % (self.LOCCTR, line))
             tokens = line.tokenize()
 
             self.lineno = line.lineno
@@ -202,7 +202,10 @@ if __name__ == "__main__":
             print("\nStarting assemble %s ..." % program.source)
             program.assemble()
             print("Done.")
-            print(program.symtab)
+            symlist = list(program.symtab.items())
+            symlist.sort(key=lambda x : x[1])
+            for x in symlist:
+                print("%s\t\t: 0x%4X" %(x[0], x[1]))
         except AssembleError:
             print("Assemble failed.")
             continue
