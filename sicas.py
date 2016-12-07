@@ -227,7 +227,7 @@ if __name__ == "__main__":
             if listing:
                 program.listing()
             symlist = list(program.symtab.items())
-            symlist.sort(key=lambda x : x[1])
+            symlist.sort(key=lambda x : (x[1], x[0]))
             for x in symlist:
                 print("%s\t\t: 0x%04X" %(x[0], x[1]))
         except AssembleError:
