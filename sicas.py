@@ -14,9 +14,13 @@ class Line:
         self.lineno = lineno
         self.fmt = 0
         self.loc = 0
+        self.base = False
     
     def __str__(self):
         return self.assembly
+
+    def __repr__(self):
+        return str(self)
 
     def tokenize(self):
         return self.assembly.split()
@@ -41,9 +45,10 @@ class Program:
         self.lineno = 0
         self.content = list(Line(line.strip('\n'), lineno) for lineno, line in enumerate(open(source, "r").readlines(), 1))
         self.symtab = PRELOAD_SYMTAB.copy()
+        self.base = False
 
     def error(self, msg):
-        print("\n%s:%s" % (self.source, str(self.lineno)) + "  " + str(self.content[self.lineno - 1]))
+        print("\n%s:%s" % (self.source, str(self.lineno)) + "  " + str(self.current_line()))
         print("Error : " + msg + '\n')
         raise AssembleError
 
@@ -51,6 +56,7 @@ class Program:
         for line in self.content:
             program.lineno += 1
             line.loc = self.LOCCTR
+            line.base = self.base
             if line.assembly[0] == '.':
                 line.loc = None
                 continue
@@ -93,11 +99,10 @@ def handler_START(program, tokens):
         program.started = True
         program.current_line().loc = None
 
-def handler_END(program_inf, tokens):
+def handler_END(program, tokens):
     program.current_line().loc = None
-    pass
 
-def handler_BYTE(program_inf, tokens):
+def handler_BYTE(program, tokens):
     if tokens[0] == "BYTE":
         program.error("Must specify a label for the allocated space.")
     elif tokens[2] == "BYTE":
@@ -108,18 +113,25 @@ def handler_BYTE(program_inf, tokens):
     "CHECK LABEL NAME"
     value = tokens[2]
     if value[0] == 'C':
-        "CHECK QUOTION MARKS"
+        "CHECK MATCHING QUOTION MARKS"
+        hexstr = ''.join(["%2X" % c for c in value[2:-1].encode()])
+        program.current_line().code = int(hexstr, 16)
+        program.current_line().fmt = len(value[2:-1])
+        fill_foward(program.symtab[tokens[0]], program.LOCCTR)
         program.symtab[tokens[0]] = program.LOCCTR
-        program.LOCCTR += len(tokens[2][2:-1])
+        program.LOCCTR += len(value[2:-1])
     elif value[0] == 'X':
         try:
             "CHECK QUOTION MARKS"
+            program.current_line().code = int(value[2:-1], 16)
+            program.current_line().fmt = 1
+            fill_foward(program.symtab[tokens[0]], program.LOCCTR)
             program.symtab[tokens[0]] = program.LOCCTR
             program.LOCCTR += 1
         except ValueError:
             program.error("The \"X\" requires a hex value, but %s is not." % value[2:-1])
 
-def handler_WORD(program_inf, tokens):
+def handler_WORD(program, tokens):
     pass
 
 def handler_RESW(program, tokens):
@@ -132,10 +144,11 @@ def handler_RESW(program, tokens):
 
     "CHECK LABEL NAME"
     "LENGTH IS DECIMAL"
+    fill_foward(program.symtab[tokens[0]], program.LOCCTR)
     program.symtab[tokens[0]] = program.LOCCTR
     program.LOCCTR += int(tokens[2]) * 3
 
-def handler_RESB(program_inf, tokens):
+def handler_RESB(program, tokens):
     if tokens[0] == "RESB":
         program.error("Must specify a label for the allocated space.")
     elif tokens[2] == "RESB":
@@ -145,12 +158,17 @@ def handler_RESB(program_inf, tokens):
 
     "CHECK LABEL NAME"
     "LENGTH IS DECIMAL"
+    fill_foward(program.symtab[tokens[0]], program.LOCCTR)
     program.symtab[tokens[0]] = program.LOCCTR
     program.LOCCTR += int(tokens[2])
 
-def handler_BASE(program_inf, tokens):
+def handler_BASE(program, tokens):
+    program.base = True
     program.current_line().loc = None
-    pass
+
+def handler_NOBASE(program, tokens):
+    program.base = False
+    program.current_line().loc = None
 
 DIRTAB = {
     "START" : handler_START,
@@ -160,7 +178,23 @@ DIRTAB = {
     "RESB"  : handler_RESB,
     "RESW"  : handler_RESW,
     "BASE"  : handler_BASE,
+    "NOBASE" : handler_NOBASE,
 }
+
+def fill_foward(fwd_lst, addr):
+    for line in fwd_lst:
+        if line.fmt == 3:
+            disp = (addr - (line.loc + line.fmt)) & 0xFFF
+            if disp < 2048 or disp >= -2048:
+                line.code |= disp
+                line.code |= PC_RELATE
+            elif line.base:
+                pass
+            else:
+                program.error("no enough length to hold the displacement, try format 4.")
+        elif line.fmt == 4:
+            line.code |= addr
+
 
 def has_directives(program, tokens):
     for token in tokens:
@@ -180,28 +214,39 @@ def has_instructions(program, tokens):
     for idx, token in enumerate(tokens):
         # instruction hasn't meet yet (instruction or label)
         if inst == "":
-            # without prefix
+            # instruction without prefix
             if token in OPTAB:
                 inst = token
-            # with prefix
+            # instruction with prefix
             elif token[1:] in OPTAB:
                 prefix = token[0]
                 inst = token[1:]
                 if prefix != '+':
-                    program.error("invalid instruction prefix \"%s\"" % prefix)
+                    program.error("invalid instruction prefix \"%s\"." % prefix)
                 elif not (OPTAB[inst].inf & FORMAT4):
                     program.error("%s does not support format 4." % inst)
                 else:
                     fmt = 4
+            # is label
             else:
-                "CHECK LABEL"
-                program.symtab[tokens[0]] = program.LOCCTR
+                label = tokens[0]
+                # check label format
+                if label in OPTAB:
+                    program.error("symbol name \"%s\" is same as an insturction." % label)
+                elif label in program.symtab and type(program.symtab[label]) != list:
+                    program.error("redefined symbol \"%s\"." % label)
+                elif label in program.symtab:
+                    fill_foward(program.symtab[label], program.LOCCTR)
+                program.symtab[label] = program.LOCCTR
                 continue
         # instruction met (operand)
-        elif operand == "":
-            operand = token
         else:
-            operand2 = token
+            if token.find(',') != -1:
+                operand, operand2, *dummy = token.split(',')
+                if len(dummy) > 1:
+                    program.error("too many operands")
+            else:
+                operand = token
 
     # compute the instruction format
     if fmt != 4:
@@ -210,11 +255,12 @@ def has_instructions(program, tokens):
             mask >>= 1
             fmt += 1
         fmt = (5 - fmt)
-    program.LOCCTR += fmt
 
     # validate the foramt
-    if operand2 != "" and fmt != 2:
-        program.error("Only format 2 insturctions allow two operands")
+    if (operand2 != "" and fmt != 2) and operand2 != 'X':
+        program.error("Only format 2 insturctions allow two operands.")
+    if fmt < 3 and operand2 == 'X':
+        program.error("Only format 3 and 4 allow indexed addresing")
 
     # codegen
     code = OPTAB[inst].opcode
@@ -234,35 +280,54 @@ def has_instructions(program, tokens):
         elif prefix == '@':
             mask = INDR_ADDR
         elif prefix != "":
-            program.error("Unrecognized addressing prefix %s" % prefix)
-        code |= mask << (BYTESIZE * 2)
+            program.error("Unrecognized addressing prefix \"%s\"." % prefix)
+
+        if operand2 == 'X':
+            mask |= INDEX_ADDR
+        if fmt == 4:
+            mask |= EXTEND_FMT
+
+        code |= mask
     # handle instruction(s) which has no operand
     elif inst == "RSUB":
-        code |= DEFAULT_ADDR << (BYTESIZE * 2)
+        code |= DEFAULT_ADDR
     
     if fmt == 4:
         code <<= BYTESIZE
-        code |= EXTEND_FMT
 
-    if operand.isnumeric():
-        code |= int(operand)
-    elif operand in program.symtab:
-        if fmt == 2:
-            # some format 2 instruction accept 2 operand
-            "VALIDATE FORMAT2"
-            code |= program.symtab[operand] << 4
+    # generate operand
+    if inst != "RSUB":
+        if operand.isnumeric():
+            operand = int(operand)
+            if (fmt == 3 and operand > 2**12 - 1) or (fmt == 4 and operand > 2**20 - 1):
+                program.error("operand with value = %d is out of range." % operand)
+            else:
+                code |= operand
+        elif operand in program.symtab and type(program.symtab[operand]) != list:
+            if fmt == 2:
+                # some format 2 instruction accept 2 operand
+                "VALIDATE FORMAT2"
+                code |= program.symtab[operand] << 4
+            elif fmt == 3:
+                disp = (program.symtab[operand] - (program.LOCCTR + fmt)) & 0xFFF
+                if disp < 2048 or disp >= -2048:
+                    code |= disp
+                    code |= PC_RELATE
+                elif program.base:
+                    pass
+                else:
+                    program.error("no enough length to hold the displacement, try format 4.")
+            elif fmt == 4:
+                code |= program.symtab[operand]
+        elif operand in program.symtab:
+            program.symtab[operand].append(program.current_line())
         else:
-            code |= program.symtab[operand]
-    else:
-        pass
+            program.symtab[operand] = [program.current_line()]
 
-    program.content[program.lineno - 1].fmt = fmt
-    program.content[program.lineno - 1].code = code
+    program.LOCCTR += fmt
+    program.current_line().fmt = fmt
+    program.current_line().code = code
     return True
-
-def has_labels(program_inf, tokens):
-    pass
-
 
 if __name__ == "__main__":
     # Parse the arguments
@@ -292,3 +357,4 @@ if __name__ == "__main__":
         except AssembleError:
             print("Assemble failed.")
             continue
+

@@ -10,10 +10,15 @@ FORMAT3 = 0x20
 FORMAT2 = 0x40
 FORMAT1 = 0x80
 
-IMM_ADDR = 0b01
-INDR_ADDR = 0b10
-DEFAULT_ADDR = 0b11
-EXTEND_FMT = 0b1 << 20
+
+PC_RELATE = 0b000010 << 12
+BASE_RELATE = 0b000100 << 12
+
+IMM_ADDR = 0b010000 << 12
+INDR_ADDR = 0b100000 << 12
+INDEX_ADDR = 0b001000 << 12
+DEFAULT_ADDR = 0b110000 << 12
+EXTEND_FMT = 0b000001 << 12
 
 class instruction:
     def __init__(self, opcode, fmt, mode=""):
