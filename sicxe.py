@@ -7,12 +7,17 @@ MODE_P = 0x8
 
 FORMAT4 = 0x10
 FORMAT3 = 0x20
-FORAMT2 = 0x40
+FORMAT2 = 0x40
 FORMAT1 = 0x80
+
+IMM_ADDR = 0b01
+INDR_ADDR = 0b10
+DEFAULT_ADDR = 0b11
+EXTEND_FMT = 0b1 << 20
 
 class instruction:
     def __init__(self, opcode, fmt, mode=""):
-        self.opcode = opcode
+        self.opcode = opcode << ((fmt - 1) * BYTESIZE)
         self.inf = 0x10 << (4 - fmt)
         if self.inf & FORMAT3:
             self.inf |= FORMAT4

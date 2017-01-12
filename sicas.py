@@ -22,10 +22,14 @@ class Line:
         return self.assembly.split()
 
     def listing_tuple(self):
+        locfmt = ""
+        codefmt = ""
         if self.loc != None:
-            return (self.lineno, "%04X" % self.loc, self.assembly, self.code)
-        else:
-            return (self.lineno, "", self.assembly, self.code)
+            locfmt = "%04X" % self.loc
+        if self.code != "":
+            codefmt = "%%0%dX" % (self.fmt * 2)
+            codefmt = codefmt % self.code
+        return (self.lineno, locfmt, self.assembly.expandtabs(8), codefmt)
 
 class Program:
     def __init__(self, source):
@@ -62,9 +66,9 @@ class Program:
                 program.error("Except a directive, opcde or label.")
 
     def listing(self):
-        print("Lineno\tLOCCTR\tSource Statement\t\t\tObject Code")
+        print("Lineno  LOCCTR  Source Statement              Object Code")
         for line in self.content:
-            print("%d\t%s\t%s\t\t\t%s" % line.listing_tuple())
+            print("%-8d%-8s%-30s%-10s" % line.listing_tuple())
 
     def current_line(self):
         return self.content[self.lineno - 1]
@@ -166,40 +170,95 @@ def has_directives(program, tokens):
     return False
 
 def has_instructions(program, tokens):
+    if len(tokens) == 0:
+        return False
+
+    inst = ""
+    operand = ""
+    operand2 = ""
+    fmt = 0
     for idx, token in enumerate(tokens):
-        prefix = ""
-        inst = ""
-        fmt = 0
-        if token in OPTAB:
-            inst = token
-
-            if idx == 1:
-                "CHECK LABEL"
-                program.symtab[tokens[0]] = program.LOCCTR
-        elif token[1:] in OPTAB:
-            prefix = token[0]
-            inst = token[1:]
-            if prefix == '+' and not (OPTAB[inst].inf & FORMAT4):
-                program.error("%s does not support format 4." % inst)
+        # instruction hasn't meet yet (instruction or label)
+        if inst == "":
+            # without prefix
+            if token in OPTAB:
+                inst = token
+            # with prefix
+            elif token[1:] in OPTAB:
+                prefix = token[0]
+                inst = token[1:]
+                if prefix != '+':
+                    program.error("invalid instruction prefix \"%s\"" % prefix)
+                elif not (OPTAB[inst].inf & FORMAT4):
+                    program.error("%s does not support format 4." % inst)
+                else:
+                    fmt = 4
             else:
-                fmt = 4
-
-            if idx == 1:
                 "CHECK LABEL"
                 program.symtab[tokens[0]] = program.LOCCTR
+                continue
+        # instruction met (operand)
+        elif operand == "":
+            operand = token
         else:
-            continue
+            operand2 = token
 
-        if fmt != 4:
-            mask = OPTAB[inst].inf & 0xE0
-            while mask != 0x8:
-                mask >>= 1
-                fmt += 1
-            fmt = (5 - fmt)
-        program.LOCCTR += fmt
+    # compute the instruction format
+    if fmt != 4:
+        mask = OPTAB[inst].inf & (FORMAT1 | FORMAT2 | FORMAT3)
+        while mask != 0b1000:
+            mask >>= 1
+            fmt += 1
+        fmt = (5 - fmt)
+    program.LOCCTR += fmt
 
-        return True
-    return False
+    # validate the foramt
+    if operand2 != "" and fmt != 2:
+        program.error("Only format 2 insturctions allow two operands")
+
+    # codegen
+    code = OPTAB[inst].opcode
+
+    # parse the prefix for format 3 & 4 instructions
+    if (fmt == 3 or fmt == 4) and inst != "RSUB":
+        prefix = ""
+        # parse the operand
+        if not operand[0].isalnum():
+            prefix = operand[0]
+            operand = operand[1:]
+
+        # not sure if no prefix has to mask
+        mask = DEFAULT_ADDR
+        if prefix == '#':
+            mask = IMM_ADDR
+        elif prefix == '@':
+            mask = INDR_ADDR
+        elif prefix != "":
+            program.error("Unrecognized addressing prefix %s" % prefix)
+        code |= mask << (BYTESIZE * 2)
+    # handle instruction(s) which has no operand
+    elif inst == "RSUB":
+        code |= DEFAULT_ADDR << (BYTESIZE * 2)
+    
+    if fmt == 4:
+        code <<= BYTESIZE
+        code |= EXTEND_FMT
+
+    if operand.isnumeric():
+        code |= int(operand)
+    elif operand in program.symtab:
+        if fmt == 2:
+            # some format 2 instruction accept 2 operand
+            "VALIDATE FORMAT2"
+            code |= program.symtab[operand] << 4
+        else:
+            code |= program.symtab[operand]
+    else:
+        pass
+
+    program.content[program.lineno - 1].fmt = fmt
+    program.content[program.lineno - 1].code = code
+    return True
 
 def has_labels(program_inf, tokens):
     pass
