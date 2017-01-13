@@ -14,7 +14,7 @@ class Line:
         self.lineno = lineno
         self.fmt = 0
         self.loc = 0
-        self.base = False
+        self.base = -1
     
     def __str__(self):
         return self.assembly
@@ -45,10 +45,12 @@ class Program:
         self.lineno = 0
         self.content = list(Line(line.strip('\n'), lineno) for lineno, line in enumerate(open(source, "r").readlines(), 1))
         self.symtab = PRELOAD_SYMTAB.copy()
-        self.base = False
+        self.base = -1
 
-    def error(self, msg):
-        print("\n%s:%s" % (self.source, str(self.lineno)) + "  " + str(self.current_line()))
+    def error(self, msg, line = None):
+        if line == None:
+            line = self.current_line()
+        print("\n%s:%s" % (self.source, str(line.lineno)) + "  " + str(line))
         print("Error : " + msg + '\n')
         raise AssembleError
 
@@ -117,7 +119,8 @@ def handler_BYTE(program, tokens):
         hexstr = ''.join(["%2X" % c for c in value[2:-1].encode()])
         program.current_line().code = int(hexstr, 16)
         program.current_line().fmt = len(value[2:-1])
-        fill_foward(program.symtab[tokens[0]], program.LOCCTR)
+        if tokens[0] in program.symtab and type(program.symtab[tokens[0]]) == list:
+            fill_foward(program.symtab[tokens[0]], program.LOCCTR)
         program.symtab[tokens[0]] = program.LOCCTR
         program.LOCCTR += len(value[2:-1])
     elif value[0] == 'X':
@@ -125,7 +128,8 @@ def handler_BYTE(program, tokens):
             "CHECK QUOTION MARKS"
             program.current_line().code = int(value[2:-1], 16)
             program.current_line().fmt = 1
-            fill_foward(program.symtab[tokens[0]], program.LOCCTR)
+            if tokens[0] in program.symtab and type(program.symtab[tokens[0]]) == list:
+                fill_foward(program.symtab[tokens[0]], program.LOCCTR)
             program.symtab[tokens[0]] = program.LOCCTR
             program.LOCCTR += 1
         except ValueError:
@@ -144,7 +148,8 @@ def handler_RESW(program, tokens):
 
     "CHECK LABEL NAME"
     "LENGTH IS DECIMAL"
-    fill_foward(program.symtab[tokens[0]], program.LOCCTR)
+    if tokens[0] in program.symtab and type(program.symtab[tokens[0]]) == list:
+        fill_foward(program.symtab[tokens[0]], program.LOCCTR)
     program.symtab[tokens[0]] = program.LOCCTR
     program.LOCCTR += int(tokens[2]) * 3
 
@@ -158,16 +163,19 @@ def handler_RESB(program, tokens):
 
     "CHECK LABEL NAME"
     "LENGTH IS DECIMAL"
-    fill_foward(program.symtab[tokens[0]], program.LOCCTR)
+    if tokens[0] in program.symtab and type(program.symtab[tokens[0]]) == list:
+        fill_foward(program.symtab[tokens[0]], program.LOCCTR)
     program.symtab[tokens[0]] = program.LOCCTR
     program.LOCCTR += int(tokens[2])
 
 def handler_BASE(program, tokens):
-    program.base = True
+    # watch out, foward referencing base
+    # base referncing list?
+    program.base = tokens[1]
     program.current_line().loc = None
 
 def handler_NOBASE(program, tokens):
-    program.base = False
+    program.base = -1
     program.current_line().loc = None
 
 DIRTAB = {
@@ -182,18 +190,36 @@ DIRTAB = {
 }
 
 def fill_foward(fwd_lst, addr):
-    for line in fwd_lst:
-        if line.fmt == 3:
-            disp = (addr - (line.loc + line.fmt)) & 0xFFF
-            if disp < 2048 or disp >= -2048:
-                line.code |= disp
-                line.code |= PC_RELATE
-            elif line.base:
-                pass
+    for line, ref, reftype in fwd_lst:
+        if reftype == REF_OP:
+            if line.fmt == 3:
+                disp = (addr - (line.loc + line.fmt))
+                if disp < 2048 or disp >= -2048:
+                    line.code |= (disp & 0xFFF) | PC_RELATIVE
+                elif line.base != -1:
+                    # if base is defined
+                    if line.base in program.symtab and type(program.symtab[line.base]) != list:
+                        disp = (program.symtab[operand] - program.symtab[line.base])
+                        if disp < 4096 and disp >= 0:
+                            code |= (disp & 0xFFF) | BASE_RELATIVE
+                        else:
+                            program.error("no enough length to hold the displacement, try format 4.", line)
+                    # foward base reference
+                    elif line.base in program.symtab:
+                        program.symtab[line.base].append((program.current_line(), REF_BASE))
+                    else:
+                        program.symtab[line.base] = [(program.current_line(), REF_BASE)]
+                else:
+                    program.error("no enough length to hold the displacement, try format 4.", line)
+            elif line.fmt == 4:
+                line.code |= addr
+        elif reftype == REF_BASE:
+            disp = program.symtab[ref] - addr
+            if disp < 4096 and disp >= 0:
+                line.code |= (disp & 0xFFF) | BASE_RELATIVE
             else:
-                program.error("no enough length to hold the displacement, try format 4.")
-        elif line.fmt == 4:
-            line.code |= addr
+                program.error("no enough length to hold the displacement, try format 4.", line)
+
 
 
 def has_directives(program, tokens):
@@ -309,20 +335,36 @@ def has_instructions(program, tokens):
                 "VALIDATE FORMAT2"
                 code |= program.symtab[operand] << 4
             elif fmt == 3:
-                disp = (program.symtab[operand] - (program.LOCCTR + fmt)) & 0xFFF
-                if disp < 2048 or disp >= -2048:
-                    code |= disp
-                    code |= PC_RELATE
-                elif program.base:
-                    pass
+                disp = (program.symtab[operand] - (program.LOCCTR + fmt))
+                # try to use PC-realtive
+                if disp < 2048 and disp >= -2048:
+                    code |= (disp & 0xFFF) | PC_RELATIVE
+                # try to use base-relative
+                elif program.base != -1:
+                    # if base is defined
+                    if program.base in program.symtab and type(program.symtab[program.base]) != list:
+                        disp = (program.symtab[operand] - program.symtab[program.base]) & 0xFFF
+                        print(disp, hex(disp))
+                        if disp < 4096 and disp >= 0:
+                            code |= (disp & 0xFFF) | BASE_RELATIVE
+                        else:
+                            program.error("no enough length to hold the displacement, try format 4.")
+                    # foward base reference
+                    elif program.base in program.symtab:
+                        if inst == "STCH":
+                            print(disp)
+                        program.symtab[program.base].append((program.current_line(), operand, REF_BASE))
+                    else:
+                        program.symtab[program.base] = [(program.current_line(), operand, REF_BASE)]
+
                 else:
                     program.error("no enough length to hold the displacement, try format 4.")
             elif fmt == 4:
                 code |= program.symtab[operand]
         elif operand in program.symtab:
-            program.symtab[operand].append(program.current_line())
+            program.symtab[operand].append((program.current_line(), operand, REF_OP))
         else:
-            program.symtab[operand] = [program.current_line()]
+            program.symtab[operand] = [(program.current_line(), operand, REF_OP)]
 
     program.LOCCTR += fmt
     program.current_line().fmt = fmt
