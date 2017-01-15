@@ -9,7 +9,8 @@ class AssembleError(BaseException):
 
 class Line:
     def __init__(self, assembly, lineno):
-        self.assembly = assembly
+        self.src = assembly
+        self.assembly = assembly.split('.')[0]
         self.code = ""
         self.lineno = lineno
         self.fmt = 0
@@ -33,7 +34,7 @@ class Line:
         if self.code != "":
             codefmt = "%%0%dX" % (self.fmt * 2)
             codefmt = codefmt % self.code
-        return (self.lineno, locfmt, self.assembly.expandtabs(8), codefmt)
+        return (self.lineno, locfmt, self.src.expandtabs(8), codefmt)
 
 class Program:
     def __init__(self, source):
@@ -59,7 +60,7 @@ class Program:
             program.lineno += 1
             line.loc = self.LOCCTR
             line.base = self.base
-            if line.assembly[0] == '.':
+            if line.assembly == '':
                 line.loc = None
                 continue
 
@@ -74,12 +75,18 @@ class Program:
                 program.error("Except a directive, opcde or label.")
 
     def listing(self):
-        print("Lineno  LOCCTR  Source Statement              Object Code")
+        stmt_len = len(max(self.content, key=lambda stmt: len(stmt.src)).src) + 10
+        fmt = "%%-8s%%-8s%%-%ds%%-10s" % stmt_len
+        print(fmt % ("Lineno", "LOCCTR", "Source Statements", "Object Code"))
         for line in self.content:
-            print("%-8d%-8s%-30s%-10s" % line.listing_tuple())
+            print(fmt % line.listing_tuple())
 
     def current_line(self):
         return self.content[self.lineno - 1]
+
+    def output(self, file_name):
+        f = open(file_name, "w")
+        pass
 
 def handler_START(program, tokens):
     if "START" in tokens:
@@ -373,20 +380,19 @@ if __name__ == "__main__":
     parser.add_argument('-L', '--listing', help='generate assembly listing.', action='store_true')
     parser.add_argument('input', nargs='+', help='the source assembly file(s).')
     args = parser.parse_args()
-    input_files = args.input
-    listing = args.listing
 
     print("SIC/XE Assembler")
 
     # Open files in the list
-    for file_name in input_files:
+    for file_name in args.input:
         program = Program(file_name)
         try:
             print("\nStarting assemble %s ..." % program.source)
             program.assemble()
             print("Done.")
-            if listing:
+            if args.listing:
                 program.listing()
+            program.output(args.output)
             symlist = list(program.symtab.items())
             symlist.sort(key=lambda x : (x[1], x[0]))
             for x in symlist:
