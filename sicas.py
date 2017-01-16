@@ -75,12 +75,13 @@ class Program:
             else:
                 program.error("Except a directive, opcde or label.")
 
-    def listing(self):
+    def listing(self, filename):
         stmt_len = len(max(self.content, key=lambda stmt: len(stmt.src)).src) + 10
-        fmt = "%%-8s%%-8s%%-%ds%%-10s" % stmt_len
-        print(fmt % ("Lineno", "LOCCTR", "Source Statements", "Object Code"))
-        for line in self.content:
-            print(fmt % line.listing_tuple())
+        fmt = "\n%%-8s%%-8s%%-%ds%%-10s" % stmt_len
+        with open(filename, "w") as f:
+            f.write(fmt % ("Lineno", "LOCCTR", "Source Statements", "Object Code"))
+            for line in self.content:
+                f.write(fmt % line.listing_tuple())
 
     def current_line(self):
         return self.content[self.lineno - 1]
@@ -168,7 +169,7 @@ def handler_START(program, tokens):
         program.current_line().loc = None
 
 def handler_END(program, tokens):
-    program.current_line().loc = None
+    program.current_line().loc = Nones
 
 def handler_BYTE(program, tokens):
     if tokens[0] == "BYTE":
@@ -352,9 +353,8 @@ def has_instructions(program, tokens):
     if fmt < 3 and operand2 == 'X':
         program.error("Only format 3 and 4 allow indexed addresing")
 
-    # codegen
+    # generate opcode
     code = OPTAB[inst].opcode
-
     # parse the prefix for format 3 & 4 instructions
     if (fmt == 3 or fmt == 4) and inst != "RSUB":
         prefix = ""
@@ -363,7 +363,7 @@ def has_instructions(program, tokens):
             prefix = operand[0]
             operand = operand[1:]
 
-        # not sure if no prefix has to mask
+        # generate the addressing mask (nixbpe)
         mask = DEFAULT_ADDR
         if prefix == '#':
             mask = IMM_ADDR
@@ -378,10 +378,11 @@ def has_instructions(program, tokens):
             mask |= EXTEND_FMT
 
         code |= mask
-    # handle instruction(s) which has no operand
+    # handle format 3/4 instruction which has no operand
     elif inst == "RSUB":
         code |= DEFAULT_ADDR
     
+    # shift format 4 instructions
     if fmt == 4:
         code <<= BYTESIZE
 
@@ -395,7 +396,9 @@ def has_instructions(program, tokens):
                 code |= operand
         elif operand in program.symtab and type(program.symtab[operand]) != list:
             if fmt == 2:
-                # some format 2 instruction accept 2 operand
+                # some format 2 instruction accept 2 operands
+                if inst in ["ADDR", "COMPR", "DIVR", "MULR", "RMO", "SHIFTL", "SHIFTR", "SUBR"]:
+                    code |= program.symtab[operand2]
                 "VALIDATE FORMAT2"
                 code |= program.symtab[operand] << 4
             elif fmt == 3:
@@ -427,6 +430,7 @@ def has_instructions(program, tokens):
         else:
             program.symtab[operand] = [(program.current_line(), operand, REF_OP)]
 
+    # find the first executable location
     if program.start_exec == -1:
         program.start_exec = program.LOCCTR
     program.LOCCTR += fmt
@@ -438,7 +442,7 @@ if __name__ == "__main__":
     # Parse the arguments
     parser = argparse.ArgumentParser(description="A Python SIC/XE Assembler")
     parser.add_argument('-o', '--output', help='the output file.', default='a.out')
-    parser.add_argument('-L', '--listing', help='generate assembly listing.', action='store_true')
+    parser.add_argument('-L', '--listing', help='generate assembly listing.')
     parser.add_argument('input', nargs='+', help='the source assembly file(s).')
     args = parser.parse_args()
 
@@ -452,7 +456,7 @@ if __name__ == "__main__":
             program.assemble()
             print("Done.")
             if args.listing:
-                program.listing()
+                program.listing(args.listing)
             program.output(args.output)
         except AssembleError:
             print("Assemble failed.")
