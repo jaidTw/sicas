@@ -14,7 +14,7 @@ class Line:
         self.code = ""
         self.lineno = lineno
         self.fmt = 0
-        self.loc = 0
+        self.loc = None
         self.base = -1
     
     def __str__(self):
@@ -41,6 +41,7 @@ class Program:
         self.source = os.path.basename(source)
         self.name = ''
         self.start_addr = 0x0
+        self.start_exec = -1
         self.started = False
         self.LOCCTR = 0
         self.lineno = 0
@@ -85,8 +86,64 @@ class Program:
         return self.content[self.lineno - 1]
 
     def output(self, file_name):
-        f = open(file_name, "w")
-        pass
+        with open(file_name, "w") as f:
+            f.write("H%-6s%06X%06X" % (self.name, self.start_addr, self.LOCCTR - self.start_addr))
+            M_list = []
+            newrecord = True
+            colcount = 0
+            i = 0
+            line = self.content[0]
+            last = line
+            brk = False
+            while i < len(self.content):
+                line = self.content[i]
+                if newrecord:
+                    if line.loc == None:
+                        i += 1
+                        continue
+                    rec = "\nT%06XLL" % line.loc
+                    newrecord = False
+                    colcount = 0
+
+                # INSTRUCTIONS OR BYTE/WORD
+                if line.code != "":
+                    codefmt = "%%0%dX" % (line.fmt * 2)
+                    code = codefmt % line.code
+                # other directives or empty line
+                else:
+                    i += 1
+                    continue
+
+                # check if have to break the record
+                # too far to last instruction
+                if line.code != "" and line.loc != None and last.code != "" and (line.loc > last.loc + last.fmt * 2) and not brk:
+                    newrecord = True
+                    brk = True
+                # exceed record length
+                elif colcount + len(code) > 60:
+                    newrecord = True
+
+                # need to relocate
+                if line.fmt == 4 and line.code & ((DEFAULT_ADDR ^ IMM_ADDR) << BYTESIZE):
+                    M_list.append(line)
+
+                if newrecord:
+                    rec = rec.replace("LL", "%02X" % (colcount // 2))
+                    f.write(rec)
+                    continue
+                else:
+                    colcount += len(code)
+                    rec += code
+                    last = line
+                    i += 1
+                    if brk:
+                        brk = False
+            rec = rec.replace("LL", "%02X" % (colcount // 2))
+            f.write(rec)
+            for line in M_list:
+                f.write("\nM%06X%02X" % (line.loc + 1, 5))
+            f.write("\nE%06X" % self.start_exec)
+
 
 def handler_START(program, tokens):
     if "START" in tokens:
@@ -101,10 +158,12 @@ def handler_START(program, tokens):
             pass
 
         program.name = tokens[0]
+        if len(program.name) > 6:
+            program.error("Program name must not longer than 6 characters.")
         try:
             program.start_addr = int(tokens[2], 16)
         except ValueError:
-           program.error("%s is an invalid value for starting address (hexadecimal is required)." % tokens[2])
+            program.error("%s is an invalid value for starting address (hexadecimal is required)." % tokens[2])
         program.started = True
         program.current_line().loc = None
 
@@ -368,6 +427,8 @@ def has_instructions(program, tokens):
         else:
             program.symtab[operand] = [(program.current_line(), operand, REF_OP)]
 
+    if program.start_exec == -1:
+        program.start_exec = program.LOCCTR
     program.LOCCTR += fmt
     program.current_line().fmt = fmt
     program.current_line().code = code
@@ -393,10 +454,6 @@ if __name__ == "__main__":
             if args.listing:
                 program.listing()
             program.output(args.output)
-            symlist = list(program.symtab.items())
-            symlist.sort(key=lambda x : (x[1], x[0]))
-            for x in symlist:
-                print("%s\t\t: 0x%04X" %(x[0], x[1]))
         except AssembleError:
             print("Assemble failed.")
             continue
