@@ -4,9 +4,11 @@ import argparse
 import os
 from sicxe import *
 
+# A class to indicate assembly error
 class AssembleError(BaseException):
     pass
 
+# class to store info of each source statements
 class Line:
     def __init__(self, assembly, lineno):
         self.src = assembly
@@ -23,9 +25,11 @@ class Line:
     def __repr__(self):
         return str(self)
 
+    # split the source statement into several tokens
     def tokenize(self):
         return self.assembly.split()
 
+    # return a tuple for assembly listing
     def listing_tuple(self):
         locfmt = ""
         codefmt = ""
@@ -36,6 +40,7 @@ class Line:
             codefmt = codefmt % self.code
         return (self.lineno, locfmt, self.src.expandtabs(8), codefmt)
 
+# class to store each program info
 class Program:
     def __init__(self, source):
         self.source = os.path.basename(source)
@@ -49,6 +54,7 @@ class Program:
         self.symtab = PRELOAD_SYMTAB.copy()
         self.base = -1
 
+    # print error message indicating the line number and throw the error
     def error(self, msg, line = None):
         if line == None:
             line = self.current_line()
@@ -56,6 +62,7 @@ class Program:
         print("Error : " + msg + '\n')
         raise AssembleError
 
+    # assemble the program
     def assemble(self):
         for line in self.content:
             program.lineno += 1
@@ -75,6 +82,7 @@ class Program:
             else:
                 program.error("Except a directive, opcde or label.")
 
+    # write assembly listing to file
     def listing(self, filename):
         stmt_len = len(max(self.content, key=lambda stmt: len(stmt.src)).src) + 10
         fmt = "\n%%-8s%%-8s%%-%ds%%-10s" % stmt_len
@@ -83,9 +91,11 @@ class Program:
             for line in self.content:
                 f.write(fmt % line.listing_tuple())
 
+    # get current line
     def current_line(self):
         return self.content[self.lineno - 1]
 
+    # output object file
     def output(self, file_name):
         with open(file_name, "w") as f:
             f.write("H%-6s%06X%06X" % (self.name, self.start_addr, self.LOCCTR - self.start_addr))
@@ -144,7 +154,6 @@ class Program:
             for line in M_list:
                 f.write("\nM%06X%02X" % (line.loc + 1, 5))
             f.write("\nE%06X" % self.start_exec)
-
 
 def handler_START(program, tokens):
     if "START" in tokens:
@@ -254,6 +263,7 @@ DIRTAB = {
     "NOBASE" : handler_NOBASE,
 }
 
+# fill the instructions which referencing foward symbols
 def fill_forward(fwd_lst, addr, program):
     for line, ref, reftype in fwd_lst:
         if reftype == REF_OP:
@@ -284,8 +294,6 @@ def fill_forward(fwd_lst, addr, program):
                 line.code |= (disp & 0xFFF) | BASE_RELATIVE
             else:
                 program.error("no enough length to hold the displacement, try format 4.", line)
-
-
 
 def has_directives(program, tokens):
     for token in tokens:
