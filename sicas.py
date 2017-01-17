@@ -18,6 +18,7 @@ class Line:
         self.fmt = 0
         self.loc = None
         self.base = -1
+        self.litpool = []
     
     def __str__(self):
         return self.assembly
@@ -38,6 +39,8 @@ class Line:
         if self.code != "":
             codefmt = "%%0%dX" % (self.fmt * 2)
             codefmt = codefmt % self.code
+        if any(self.litpool):
+            locfmt = ""
         return (self.lineno, locfmt, self.src.expandtabs(8), codefmt)
 
 # class to store each program info
@@ -52,6 +55,8 @@ class Program:
         self.lineno = 0
         self.content = list(Line(line.strip('\n'), lineno) for lineno, line in enumerate(open(source, "r").readlines(), 1))
         self.symtab = PRELOAD_SYMTAB.copy()
+        self.littab = {}
+        self.endlitpool = []
         self.base = -1
 
     # print error message indicating the line number and throw the error
@@ -81,6 +86,10 @@ class Program:
                 continue
             else:
                 program.error("Except a directive, opcde or label.")
+        end_LITPOOL(self)
+        for k, v in self.symtab.items():
+            if type(v) == list:
+                program.error("Undefined symbol %s." % v)
 
     # write assembly listing to file
     def listing(self, filename):
@@ -90,6 +99,23 @@ class Program:
             f.write(fmt % ("Lineno", "LOCCTR", "Source Statements", "Object Code"))
             for line in self.content:
                 f.write(fmt % line.listing_tuple())
+                if any(line.litpool):
+                    for lit in line.litpool:
+                        code = lit[2]
+                        if lit[1][0] == 'C':
+                            code = "%%0%dX" % (len(lit[1]) - 3)
+                            code = code % lit[2]
+                        elif lit[1][0] == 'X':
+                            code = "%02X" % lit[2]
+                        f.write(fmt % ("", "%04X" % lit[0], "*\t".expandtabs(8) + lit[1], code))
+            for lit in self.endlitpool:
+                code = lit[2]
+                if lit[1][0] == 'C':
+                    code = "%%0%dX" % (len(lit[1]) - 3)
+                    code = code % lit[2]
+                elif lit[1][0] == 'X':
+                    code = "%02X" % lit[2]
+                f.write(fmt % ("", "%04X" % lit[0], "*\t".expandtabs(8) + lit[1], code))
 
     # get current line
     def current_line(self):
@@ -178,7 +204,7 @@ def handler_START(program, tokens):
         program.current_line().loc = None
 
 def handler_END(program, tokens):
-    program.current_line().loc = Nones
+    program.current_line().loc = None
 
 def handler_BYTE(program, tokens):
     if tokens[0] == "BYTE":
@@ -252,6 +278,50 @@ def handler_NOBASE(program, tokens):
     program.base = -1
     program.current_line().loc = None
 
+def handler_LTORG(program, tokens):
+    for key, lit_lst in program.littab.items():
+        if key[0] == 'C':
+            hexstr = ''.join(["%2X" % c for c in key[2:-1].encode()])
+            code = int(hexstr, 16)
+            
+            fill_lit(lit_lst, program.LOCCTR, program)
+            program.littab[key] = program.LOCCTR
+            program.current_line().litpool.append((program.LOCCTR, key, code))
+            program.LOCCTR += len(key[2:-1])
+        elif key[0] == 'X':
+            try:
+                code = int(key[2:-1], 16)
+                fill_lit(lit_lst, program.LOCCTR, program)
+                program.littab[key] = program.LOCCTR
+                program.current_line().litpool.append((program.LOCCTR, key, code))
+                program.LOCCTR += 1
+            except ValueError:
+                program.error("The \"X\" requires a hex value, but %s is not." % value[2:-1])
+
+def end_LITPOOL(program):
+    for key, lit_lst in program.littab.items():
+        if type(lit_lst) != list:
+            continue
+        if key[0] == 'C':
+            hexstr = ''.join(["%2X" % c for c in key[2:-1].encode()])
+            
+            fill_lit(lit_lst, program.LOCCTR, program)
+            program.littab[key] = program.LOCCTR
+            program.endlitpool.append((program.LOCCTR, key, hexstr))
+            program.LOCCTR += len(key[2:-1])
+        elif key[0] == 'X':
+            try:
+                code = int(key[2:-1], 16)
+                fill_lit(lit_lst, program.LOCCTR, program)
+                program.littab[key] = program.LOCCTR
+                program.endlitpool.append((program.LOCCTR, key, code))
+                program.LOCCTR += 1
+            except ValueError:
+                program.error("The \"X\" requires a hex value, but %s is not." % value[2:-1])
+
+def handler_EQU(program, tokens):
+    print("EQU")
+
 DIRTAB = {
     "START" : handler_START,
     "END"   : handler_END,
@@ -261,6 +331,8 @@ DIRTAB = {
     "RESW"  : handler_RESW,
     "BASE"  : handler_BASE,
     "NOBASE" : handler_NOBASE,
+    "LTORG" : handler_LTORG,
+    "EQU" : handler_EQU,
 }
 
 # fill the instructions which referencing foward symbols
@@ -274,7 +346,7 @@ def fill_forward(fwd_lst, addr, program):
                 elif line.base != -1:
                     # if base is defined
                     if line.base in program.symtab and type(program.symtab[line.base]) != list:
-                        disp = (program.symtab[operand] - program.symtab[line.base])
+                        disp = (addr - program.symtab[line.base])
                         if 0 <= disp < 4096:
                             code |= (disp & 0xFFF) | BASE_RELATIVE
                         else:
@@ -294,6 +366,30 @@ def fill_forward(fwd_lst, addr, program):
                 line.code |= (disp & 0xFFF) | BASE_RELATIVE
             else:
                 program.error("no enough length to hold the displacement, try format 4.", line)
+
+def fill_lit(lit_lst, addr, program):
+    for line in lit_lst:
+        if line.fmt == 3:
+            disp = (addr - (line.loc + line.fmt))
+            if -2048 <= disp < 2048:
+                line.code |= (disp & 0xFFF) | PC_RELATIVE
+            elif line.base != -1:
+                # if base is defined
+                if line.base in program.symtab and type(program.symtab[line.base]) != list:
+                    disp = (addr - program.symtab[line.base])
+                    if 0 <= disp < 4096:
+                        code |= (disp & 0xFFF) | BASE_RELATIVE
+                    else:
+                        program.error("no enough length to hold the displacement, try format 4.", line)
+                # forward base reference
+                elif line.base in program.symtab:
+                    program.symtab[line.base].append((program.current_line(), REF_BASE))
+                else:
+                    program.symtab[line.base] = [(program.current_line(), REF_BASE)]
+            else:
+                program.error("no enough length to hold the displacement, try format 4.", line)
+        elif line.fmt == 4:
+            line.code |= addr
 
 def has_directives(program, tokens):
     for token in tokens:
@@ -342,7 +438,7 @@ def has_instructions(program, tokens):
         else:
             if token.find(',') != -1:
                 operand, operand2, *dummy = token.split(',')
-                if len(dummy) > 1:
+                if any(dummy):
                     program.error("too many operands")
             else:
                 operand = token
@@ -358,11 +454,12 @@ def has_instructions(program, tokens):
     # validate the foramt
     if (operand2 != "" and fmt != 2) and operand2 != 'X':
         program.error("Only format 2 insturctions allow two operands.")
-    if fmt < 3 and operand2 == 'X':
-        program.error("Only format 3 and 4 allow indexed addresing")
+    if fmt == 1 and operand != "":
+        program.error("Format 1 instructions should not have any operands.")
 
     # generate opcode
     code = OPTAB[inst].opcode
+    isLiteral = False
     # parse the prefix for format 3 & 4 instructions
     if (fmt == 3 or fmt == 4) and inst != "RSUB":
         prefix = ""
@@ -377,6 +474,17 @@ def has_instructions(program, tokens):
             mask = IMM_ADDR
         elif prefix == '@':
             mask = INDR_ADDR
+        elif prefix == '=':
+            isLiteral = True
+            if operand not in program.littab:
+                program.littab[operand] = [program.current_line()]
+            # already defined or is not yet
+            elif operand in program.littab:
+                # try to use
+                # but if is too far, wait next
+                pass
+            else:
+                program.littab[operand].append(program.current_line())
         elif prefix != "":
             program.error("Unrecognized addressing prefix \"%s\"." % prefix)
 
@@ -393,9 +501,9 @@ def has_instructions(program, tokens):
     # shift format 4 instructions
     if fmt == 4:
         code <<= BYTESIZE
-
+    
     # generate operand
-    if inst != "RSUB":
+    if inst != "RSUB" and not isLiteral:
         if operand.isnumeric():
             operand = int(operand)
             if (fmt == 3 and operand > 2**12 - 1) or (fmt == 4 and operand > 2**20 - 1):
