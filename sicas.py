@@ -132,6 +132,7 @@ class Program:
             line = self.content[0]
             last = line
             brk = False
+            litpool = False
             while i < len(self.content):
                 line = self.content[i]
                 if newrecord:
@@ -148,8 +149,16 @@ class Program:
                     code = codefmt % line.code
                 # other directives or empty line
                 else:
-                    i += 1
-                    continue
+                    if any(line.litpool):
+                        lit = line.litpool.pop(0)
+                        code = lit[2]
+                        codefmt = "%%0%dX" % (len(lit[1]) - 3)
+                        code = codefmt % code
+                        line.litpool = line.litpool[:1]
+                        litpool = True
+                    else:
+                        i += 1
+                        continue
 
                 # check if have to break the record
                 # too far to last instruction
@@ -175,6 +184,14 @@ class Program:
                     i += 1
                     if brk:
                         brk = False
+            for lit in self.endlitpool:
+                code = lit[2]
+                codefmt = "%%0%dX" % (len(lit[1]) - 3)
+                code = codefmt % code
+                line.litpool = line.litpool[:1]
+                litpool = True
+                colcount += len(code)
+                rec += code
             rec = rec.replace("LL", "%02X" % (colcount // 2))
             f.write(rec)
             for line in M_list:
