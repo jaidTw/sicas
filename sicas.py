@@ -255,7 +255,26 @@ def handler_BYTE(program, tokens):
             program.error("The \"X\" requires a hex value, but %s is not." % value[2:-1])
 
 def handler_WORD(program, tokens):
-    pass
+    if tokens[0] == "WORD":
+        program.error("Must specify a label for the allocated space.")
+    elif tokens[2] == "WORD":
+        program.error("Multiple label were specified for WORD.")
+    elif len(tokens) < 3:
+        program.error("Requires an value for WORD.")
+
+    try:
+        value = int(tokens[2], 16)
+        if not -(2**11) < value < 2**11 - 1:
+            program.current_line().code = value
+            program.current_line().fmt = 3
+        else:
+            program.error("Value exceed the range of a byte.")
+        if tokens[0] in program.symtab and type(program.symtab[tokens[0]]) == list:
+            fill_forward(program.symtab[tokens[0]], program.LOCCTR, program)
+        program.symtab[tokens[0]] = program.LOCCTR
+        program.LOCCTR += 3
+    except ValueError:
+        program.error("Invalid hex value %s." % tokens[2])
 
 def handler_RESW(program, tokens):
     if tokens[0] == "RESW":
@@ -497,8 +516,7 @@ def has_instructions(program, tokens):
                 program.littab[operand] = [program.current_line()]
             # already defined or is not yet
             elif operand in program.littab:
-                # try to use
-                # but if is too far, wait next
+                # try to use but if is too far, wait next
                 pass
             else:
                 program.littab[operand].append(program.current_line())
@@ -576,22 +594,20 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="A Python SIC/XE Assembler")
     parser.add_argument('-o', '--output', help='the output file.', default='a.out')
     parser.add_argument('-L', '--listing', help='generate assembly listing.')
-    parser.add_argument('input', nargs='+', help='the source assembly file(s).')
+    parser.add_argument('input', nargs=1, help='the source assembly file(s).')
     args = parser.parse_args()
 
     print("SIC/XE Assembler")
 
     # Open files in the list
-    for file_name in args.input:
-        program = Program(file_name)
-        try:
-            print("\nStarting assemble %s ..." % program.source)
-            program.assemble()
-            print("Done.")
-            if args.listing:
-                program.listing(args.listing)
-            program.output(args.output)
-        except AssembleError:
-            print("Assemble failed.")
-            continue
+    program = Program(args.input[0])
+    try:
+        print("\nStarting assemble %s ..." % program.source)
+        program.assemble()
+        print("Done.")
+        if args.listing:
+            program.listing(args.listing)
+        program.output(args.output)
+    except AssembleError:
+        print("Assemble failed.")
 
